@@ -1,25 +1,25 @@
 name: VitaDock → Garmin sync
 
-# Alleen planning en handmatige start. GEEN pull_request/push-triggers:
-# zo kan code uit een fork of PR nooit met de secrets draaien.
+# Schedule and manual start only. NO pull_request/push triggers:
+# this way code from a fork or PR can never run with the secrets.
 on:
   schedule:
-    - cron: "7 10 * * *"        # dagelijks 10:07 Nederlandse tijd (zomer- en wintertijd)
+    - cron: "7 10 * * *"        # daily at 10:07 Amsterdam time (summer and winter time)
       timezone: "Europe/Amsterdam"
   workflow_dispatch:
     inputs:
       since:
-        description: "Optioneel: sync alles vanaf datum (YYYY-MM-DD)"
+        description: "Optional: sync everything from this date (YYYY-MM-DD)"
         required: false
         default: ""
       dry_run:
-        description: "Alleen tonen, niets uploaden"
+        description: "Only show, upload nothing"
         type: boolean
         default: false
 
 permissions:
   contents: read
-  actions: write                 # alleen voor de keepalive (workflow actief houden)
+  actions: write                 # only for the keepalive (keep the workflow enabled)
 
 concurrency:
   group: vitadock-garmin-sync
@@ -29,7 +29,7 @@ jobs:
   sync:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Secrets staan in deze environment; die is beperkt tot de main-branch.
+    # Secrets live in this environment; it is restricted to the main branch.
     environment: garmin-sync
     env:
       HAS_TOKEN_PAT: ${{ secrets.TOKEN_UPDATE_PAT != '' }}
@@ -39,12 +39,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Dependencies installeren (hash-gecontroleerd)
+      - name: Install dependencies (hash-verified)
         run: |
           python3 -m venv .venv
           .venv/bin/pip install --quiet --require-hashes --only-binary=:all: -r requirements.lock
 
-      - name: Garmin-tokens klaarzetten
+      - name: Prepare Garmin tokens
         env:
           GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
         run: |
@@ -53,12 +53,12 @@ jobs:
           printf '%s' "$GARMIN_TOKENS" > "$RUNNER_TEMP/garmin/garmin_tokens.json"
           cp "$RUNNER_TEMP/garmin/garmin_tokens.json" "$RUNNER_TEMP/garmin/original.json"
 
-      - name: Synchroniseren
+      - name: Sync
         env:
           VITADOCK_EMAIL: ${{ secrets.VITADOCK_EMAIL }}
           VITADOCK_PASSWORD: ${{ secrets.VITADOCK_PASSWORD }}
           GARMINTOKENS: ${{ runner.temp }}/garmin
-          # Inputs via env, nooit direct in het script interpoleren (script-injectie)
+          # Pass inputs via env, never interpolate them into the script (script injection)
           INPUT_SINCE: ${{ inputs.since }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
@@ -67,7 +67,7 @@ jobs:
           if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then args+=(--dry-run); fi
           .venv/bin/python vitadock_garmin_sync.py "${args[@]}"
 
-      - name: Ververste Garmin-tokens terugschrijven naar secret
+      - name: Write refreshed Garmin tokens back to secret
         if: always() && env.HAS_TOKEN_PAT == 'true'
         env:
           GH_TOKEN: ${{ secrets.TOKEN_UPDATE_PAT }}
@@ -76,17 +76,17 @@ jobs:
           f="$RUNNER_TEMP/garmin/garmin_tokens.json"
           if [ -s "$f" ] && ! cmp -s "$f" "$RUNNER_TEMP/garmin/original.json"; then
             gh secret set GARMIN_TOKENS --repo "$REPO" --env garmin-sync < "$f"
-            echo "Garmin-tokens ververst en opgeslagen."
+            echo "Garmin tokens refreshed and saved."
           else
-            echo "Tokens ongewijzigd."
+            echo "Tokens unchanged."
           fi
 
-      - name: Tokenbestanden opruimen
+      - name: Clean up token files
         if: always()
         run: rm -rf "$RUNNER_TEMP/garmin"
 
-      # GitHub zet geplande workflows in publieke repo's uit na 60 dagen zonder
-      # repo-activiteit. Dit zet de workflow (zonder commit) steeds weer aan.
+      # GitHub disables scheduled workflows in public repos after 60 days without
+      # repository activity. This re-enables the workflow (without a commit) on every run.
       - name: Keepalive
         if: always()
         env:
