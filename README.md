@@ -83,7 +83,7 @@ Ga naar **Actions → VitaDock → Garmin sync → Run workflow**:
 1. Draai eerst met **dry_run** aangevinkt.
 2. Draai daarna eenmalig met `since = 2018-05-01` om je historie over te zetten.
 
-Daarna draait de sync elke dag om 06:17 UTC.
+Daarna draait de sync elke dag om 10:07 Nederlandse tijd (`timezone: Europe/Amsterdam`).
 
 ## Lokaal draaien (optioneel)
 
