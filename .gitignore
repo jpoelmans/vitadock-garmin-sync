@@ -1,0 +1,10 @@
+# Nooit committen: wachtwoorden en tokens
+.env
+*.env
+!.env.example
+garmin_tokens.json
+.garminconnect/
+
+.venv/
+__pycache__/
+*.log
