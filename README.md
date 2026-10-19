@@ -1,60 +1,60 @@
 # VitaDock → Garmin Connect sync
 
-Dit script zet je Medisana-weegresultaten elke dag automatisch over van VitaDock Online (cloud.vitadock.com) naar Garmin Connect. Het neemt deze waarden mee:
+This project copies your Medisana weigh-ins from VitaDock Online (cloud.vitadock.com) to Garmin Connect automatically, once a day. It syncs these values:
 
-- gewicht
-- vet%
-- water%
-- spiermassa (in kg)
-- botmassa
+- weight
+- fat %
+- water %
+- muscle mass (in kg)
+- bone mass
 - BMI
 - BMR
 
-De sync draait als GitHub Action. Dat kan ook in een **publieke** repository: wachtwoorden, tokens en meetwaarden komen nooit in de code of in de logs.
+The sync runs as a GitHub Action. That works in a **public** repository too: passwords, tokens and measurement values never end up in the code or the logs.
 
-## Hoe het werkt
+## How it works
 
-1. Het script logt in op VitaDock Online met je eigen account. Dat is dezelfde login als op de website; het is geen officiële API.
-2. Het haalt al je weegmetingen op als JSON.
-3. Het kijkt welke weigh-ins al in Garmin staan en slaat metingen over waarvan tijd en gewicht ongeveer gelijk zijn (binnen 2 minuten en 150 g). Er ontstaan dus geen dubbele metingen.
-4. Nieuwe metingen uploadt het als FIT-weigh-in met [`python-garminconnect`](https://github.com/cyberjunky/python-garminconnect).
+1. The script logs in to VitaDock Online with your own account. This is the same login the website uses, not an official API.
+2. It fetches all your weigh-ins as JSON.
+3. It checks which weigh-ins are already in Garmin and skips measurements whose time and weight roughly match (within 2 minutes and 150 g). This prevents duplicates.
+4. It uploads the new measurements as FIT weigh-ins with [`python-garminconnect`](https://github.com/cyberjunky/python-garminconnect).
 
-## Beveiliging in een publieke repo
+## Security in a public repo
 
-| Risico | Maatregel |
+| Risk | Mitigation |
 |---|---|
-| Wachtwoord of tokens in de code | Alles staat in **environment secrets**. `.env` en tokenbestanden staan in `.gitignore`. |
-| Secrets in de logs | GitHub maskeert secrets. Het script print zelf nooit secrets of tokens. |
-| Meetwaarden in de (publieke) logs | Het script draait in **private mode**: alleen aantallen, geen gewichten of datums. Debug-logging staat uit. |
-| Een fork of PR die je secrets steelt | De workflow start **alleen** op schema of handmatig (`workflow_dispatch`), nooit door `pull_request` of `push`. De secrets staan in een environment die beperkt is tot `main`. |
-| Script-injectie via de invoervelden | Inputs gaan via `env` naar het script en worden niet in shellcode geïnterpoleerd. `--since` wordt streng gevalideerd. |
-| Supply-chain (gekaapte packages of actions) | Actions zijn op commit-SHA vastgezet. Python-packages worden alleen geïnstalleerd met `--require-hashes` uit `requirements.lock`. |
-| Tokens in cache of artifacts | Er wordt niets gecachet of als artifact geüpload. Het tokenbestand staat in `$RUNNER_TEMP` en wordt na afloop verwijderd. |
-| Ververste Garmin-tokens | Een optionele PAT schrijft de ververste tokens terug naar het secret. Die PAT is beperkt tot deze ene repo. |
+| Password or tokens in the code | Everything is stored in **environment secrets**. `.env` and token files are listed in `.gitignore`. |
+| Secrets in the logs | GitHub masks secrets. The script itself never prints secrets or tokens. |
+| Measurement values in the (public) logs | The script runs in **private mode**: it logs only counts, no weights or dates. Debug logging is off. |
+| A fork or PR stealing your secrets | The workflow starts **only** on schedule or manually (`workflow_dispatch`), never on `pull_request` or `push`. The secrets live in an environment restricted to `main`. |
+| Script injection through the input fields | Inputs reach the script through `env` and are never interpolated into shell code. `--since` is strictly validated. |
+| Supply chain (hijacked packages or actions) | Actions are pinned to a commit SHA. Python packages are installed only with `--require-hashes` from `requirements.lock`. |
+| Tokens in caches or artifacts | Nothing is cached or uploaded as an artifact. The token file lives in `$RUNNER_TEMP` and is deleted afterwards. |
+| Refreshed Garmin tokens | An optional PAT writes refreshed tokens back to the secret. That PAT is restricted to this one repo. |
 
-## Eenmalige setup
+## One-time setup
 
-### 1. Lokaal: Garmin-tokens aanmaken (op je laptop, met MFA)
+### 1. Locally: create Garmin tokens (on your own computer, with MFA)
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-$env:GARMIN_EMAIL="jij@voorbeeld.nl"; $env:GARMIN_PASSWORD="..."
+$env:GARMIN_EMAIL="you@example.com"; $env:GARMIN_PASSWORD="..."
 .venv\Scripts\python vitadock_garmin_sync.py --garmin-login
 ```
 
-De tokens komen in `%USERPROFILE%\.garminconnect\garmin_tokens.json`. Je Garmin-wachtwoord hoeft niet naar GitHub; de Action gebruikt alleen de tokens.
+The tokens are stored in `%USERPROFILE%\.garminconnect\garmin_tokens.json`. Your Garmin password never goes to GitHub; the Action only uses the tokens.
 
-### 2. Repository en environment
+### 2. Repository and environment
 
-1. Maak een nieuwe (publieke) repo aan en push deze map.
-2. Ga naar **Settings → Environments → New environment** en maak `garmin-sync` aan.
-3. Zet bij *Deployment branches and tags* de optie **Selected branches** aan, met alleen `main`.
-4. Ga naar **Settings → Actions → General** en kies bij *Fork pull request workflows* de optie **Require approval for all external contributors**.
+1. Create a new (public) repo and push this folder.
+2. Go to **Settings → Environments → New environment** and create `garmin-sync`.
+3. Under *Deployment branches and tags*, choose **Selected branches** and allow only `main`.
+4. Go to **Settings → Actions → General** and, under *Fork pull request workflows*, choose **Require approval for all external contributors**.
 
-### 3. Secrets in de environment `garmin-sync`
+### 3. Secrets in the `garmin-sync` environment
 
-Met de [GitHub CLI](https://cli.github.com/), vanuit de repo-map:
+With the [GitHub CLI](https://cli.github.com/), from the repo folder:
 
 ```powershell
 gh secret set VITADOCK_EMAIL    --env garmin-sync
@@ -62,41 +62,41 @@ gh secret set VITADOCK_PASSWORD --env garmin-sync
 Get-Content "$env:USERPROFILE\.garminconnect\garmin_tokens.json" -Raw | gh secret set GARMIN_TOKENS --env garmin-sync
 ```
 
-`gh secret set` vraagt om de waarde. Zo komt die niet in je shell-history.
+`gh secret set` prompts for the value, so it does not end up in your shell history.
 
-### 4. (Aanbevolen) Tokens automatisch laten verversen
+### 4. (Recommended) Let tokens refresh automatically
 
-Garmin kan bij het verversen een nieuwe refresh-token uitgeven. Om die te bewaren:
+Garmin may issue a new refresh token when the tokens are refreshed. To keep it:
 
-1. Maak een **fine-grained personal access token** aan:
-   - Repository access: **alleen deze repo**.
-   - Permissions: **Environments: Read and write**. Krijg je een 403-fout, voeg dan ook **Secrets: Read and write** toe.
-   - Kies een vervaldatum, bijvoorbeeld 1 jaar.
-2. Sla die op als secret `TOKEN_UPDATE_PAT` in de environment `garmin-sync`.
+1. Create a **fine-grained personal access token**:
+   - Repository access: **only this repo**.
+   - Permissions: **Environments: Read and write**. If you get a 403 error, also add **Secrets: Read and write**.
+   - Choose an expiration date, for example 1 year.
+2. Store it as the secret `TOKEN_UPDATE_PAT` in the `garmin-sync` environment.
 
-Zonder deze PAT werkt de sync ook, maar dan moet je stap 1 en de `GARMIN_TOKENS`-regel opnieuw doen zodra de tokens verlopen. De run faalt dan met een duidelijke melding.
+The sync also works without this PAT, but then you have to repeat step 1 and the `GARMIN_TOKENS` line whenever the tokens expire. The run fails with a clear message when that happens.
 
-### 5. Testen
+### 5. Testing
 
-Ga naar **Actions → VitaDock → Garmin sync → Run workflow**:
+Go to **Actions → VitaDock → Garmin sync → Run workflow**:
 
-1. Draai eerst met **dry_run** aangevinkt.
-2. Draai daarna eenmalig met `since = 2018-05-01` om je historie over te zetten.
+1. First run it with **dry_run** checked.
+2. Then run it once with `since = 2018-05-01` to copy your history.
 
-Daarna draait de sync elke dag om 10:07 Nederlandse tijd (`timezone: Europe/Amsterdam`).
+After that, the sync runs every day at 10:07 Amsterdam time (`timezone: Europe/Amsterdam`).
 
-## Lokaal draaien (optioneel)
+## Running locally (optional)
 
-Kopieer `.env.example` naar `.env` en vul het in. Daarna:
+Copy `.env.example` to `.env` and fill it in. Then:
 
 ```powershell
 .venv\Scripts\python vitadock_garmin_sync.py --dry-run
 ```
 
-`run_sync.bat` / `run_sync.sh` zijn er voor Windows Taakplanner of cron.
+`run_sync.bat` / `run_sync.sh` are there for Windows Task Scheduler or cron.
 
-## Goed om te weten
+## Good to know
 
-- Als Medisana de VitaDock-website verandert, kan de login stoppen met werken. De run faalt dan zichtbaar, en GitHub mailt je.
-- Garmin kan logins vanaf datacenter-IP's (GitHub-runners) soms blokkeren. Daarom wordt de eerste login lokaal gedaan en gebruikt de Action alleen tokens.
-- GitHub zet geplande workflows in publieke repo's na 60 dagen zonder activiteit uit. De keepalive-stap zet de workflow elke run weer aan, zonder commits.
+- If Medisana changes the VitaDock website, the login may stop working. The run then fails visibly, and GitHub emails you.
+- Garmin sometimes blocks logins from data-center IPs (such as GitHub runners). That is why the first login is done locally and the Action only uses tokens.
+- GitHub disables scheduled workflows in public repos after 60 days without activity. The keepalive step re-enables the workflow on every run, without commits.

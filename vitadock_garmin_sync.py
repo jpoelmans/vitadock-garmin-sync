@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-VitaDock Online  ->  Garmin Connect weegresultaten-synchronisatie.
+VitaDock Online  ->  Garmin Connect weigh-in synchronisation.
 
-Haalt alle weegmetingen op uit VitaDock Online (cloud.vitadock.com, met je
-gewone VitaDock-login) en uploadt de metingen die nog niet in Garmin Connect
-staan als body-composition weigh-in (gewicht, vet%, water%, spiermassa,
-botmassa, BMI, BMR).
+Fetches all weigh-ins from VitaDock Online (cloud.vitadock.com, using your
+regular VitaDock login) and uploads the measurements that are not yet in
+Garmin Connect as body-composition weigh-ins (weight, fat %, water %,
+muscle mass, bone mass, BMI, BMR).
 
-Idempotent: het script vraagt eerst de bestaande Garmin-weigh-ins in het
-venster op en slaat metingen over die er al staan. Het kan dus veilig elke dag
-(of vaker) draaien, ook vanuit een omgeving zonder blijvende schijf.
+Idempotent: the script first queries the existing Garmin weigh-ins in the
+sync window and skips measurements that are already there. It can therefore
+safely run every day (or more often), even from an environment without
+persistent storage.
 
-Configuratie via omgevingsvariabelen (of een .env-bestand naast het script):
+Configuration via environment variables (or a .env file next to the script):
   VITADOCK_EMAIL, VITADOCK_PASSWORD
-  GARMIN_EMAIL, GARMIN_PASSWORD      (alleen nodig voor de eerste login of als tokens verlopen)
-  GARMINTOKENS                        pad naar tokenbestand/-map OF de token-JSON zelf
+  GARMIN_EMAIL, GARMIN_PASSWORD      (only needed for the first login or when tokens expire)
+  GARMINTOKENS                        path to token file/directory OR the token JSON itself
                                       (default: ~/.garminconnect)
 
-Gebruik:
-  python vitadock_garmin_sync.py --garmin-login        # eenmalig, interactief (MFA)
-  python vitadock_garmin_sync.py --dry-run             # tonen wat er geüpload zou worden
-  python vitadock_garmin_sync.py                       # laatste 14 dagen synchroniseren
-  python vitadock_garmin_sync.py --since 2024-01-01    # historie bijwerken
+Usage:
+  python vitadock_garmin_sync.py --garmin-login        # one-off, interactive (MFA)
+  python vitadock_garmin_sync.py --dry-run             # show what would be uploaded
+  python vitadock_garmin_sync.py                       # sync the last 14 days
+  python vitadock_garmin_sync.py --since 2024-01-01    # backfill history
 """
 
 from __future__ import annotations
@@ -45,8 +46,8 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 )
 DEFAULT_TOKENSTORE = "~/.garminconnect"
-MATCH_TOLERANCE_S = 120      # zelfde meting als tijd binnen 2 min ...
-MATCH_WEIGHT_KG = 0.15       # ... en gewicht binnen 150 g
+MATCH_TOLERANCE_S = 120      # same measurement if the time is within 2 min ...
+MATCH_WEIGHT_KG = 0.15       # ... and the weight within 150 g
 
 log = logging.getLogger("vitadock-garmin-sync")
 
@@ -55,7 +56,7 @@ log = logging.getLogger("vitadock-garmin-sync")
 # Config
 # --------------------------------------------------------------------------- #
 def load_dotenv(path: Path) -> None:
-    """Minimale .env-lader (KEY=value), overschrijft bestaande env niet."""
+    """Minimal .env loader (KEY=value); does not override existing env vars."""
     if not path.is_file():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -70,7 +71,7 @@ def load_dotenv(path: Path) -> None:
 def env(name: str, required: bool = True) -> str | None:
     value = os.environ.get(name)
     if required and not value:
-        sys.exit(f"Ontbrekende omgevingsvariabele: {name}")
+        sys.exit(f"Missing environment variable: {name}")
     return value
 
 
@@ -132,16 +133,16 @@ def fetch_vitadock(email: str, password: str) -> list[Measurement]:
     s = requests.Session()
     s.headers["User-Agent"] = USER_AGENT
 
-    # 1. Loginpagina ophalen voor CSRF-token + sessiecookie
+    # 1. Fetch the login page for the CSRF token + session cookie
     r = s.get(f"{VITADOCK_BASE}/signin", timeout=30)
     r.raise_for_status()
     m = re.search(r'name="_csrf"\s+value="([^"]+)"', r.text) or re.search(
         r'value="([^"]+)"\s+name="_csrf"', r.text
     )
     if not m:
-        raise RuntimeError("VitaDock: CSRF-token niet gevonden op /signin")
+        raise RuntimeError("VitaDock: CSRF token not found on /signin")
 
-    # 2. Inloggen (Spring Security form login)
+    # 2. Log in (Spring Security form login)
     r = s.post(
         f"{VITADOCK_BASE}/j_spring_security_check",
         data={
@@ -157,13 +158,13 @@ def fetch_vitadock(email: str, password: str) -> list[Measurement]:
     )
     r.raise_for_status()
     if "/signin" in r.url and ("error" in r.url or "j_password" in r.text):
-        raise RuntimeError("VitaDock: inloggen mislukt (controleer e-mail/wachtwoord)")
+        raise RuntimeError("VitaDock: login failed (check email/password)")
 
-    # 3. Weegmodule openen: zet de portal-sessie (redirect naar /portal/target.php)
+    # 3. Open the weight module: sets the portal session (redirects to /portal/target.php)
     r = s.get(f"{VITADOCK_BASE}/module/target", timeout=30)
     r.raise_for_status()
 
-    # 4. Alle weegdata als JSON
+    # 4. All weight data as JSON
     r = s.get(
         f"{VITADOCK_BASE}/portal/server/target_server.php",
         params={"lang": "en_GB", "rnd": int(time.time())},
@@ -175,8 +176,8 @@ def fetch_vitadock(email: str, password: str) -> list[Measurement]:
         payload = r.json()
     except ValueError as e:
         raise RuntimeError(
-            "VitaDock: geen JSON ontvangen van target_server.php "
-            "(sessie niet geldig of de site is gewijzigd)"
+            "VitaDock: no JSON received from target_server.php "
+            "(invalid session or the site has changed)"
         ) from e
     return parse_vitadock(payload)
 
@@ -185,17 +186,17 @@ def fetch_vitadock(email: str, password: str) -> list[Measurement]:
 # Garmin
 # --------------------------------------------------------------------------- #
 def garmin_client(interactive: bool = False):
-    from garminconnect import Garmin  # lazy import, zodat --help zonder werkt
+    from garminconnect import Garmin  # lazy import, so --help works without it
 
     tokenstore = os.environ.get("GARMINTOKENS") or DEFAULT_TOKENSTORE
     inline = tokenstore.lstrip().startswith("{")
     email = env("GARMIN_EMAIL", required=interactive)
     password = env("GARMIN_PASSWORD", required=interactive)
-    prompt = (lambda: input("Garmin MFA-code: ").strip()) if interactive else None
+    prompt = (lambda: input("Garmin MFA code: ").strip()) if interactive else None
 
     api = Garmin(email=email, password=password, prompt_mfa=prompt)
     if interactive:
-        # Altijd naar een bestand schrijven, zodat de tokens bewaard blijven
+        # Always write to a file so the tokens are kept
         path = Path(DEFAULT_TOKENSTORE if inline else tokenstore).expanduser()
         api.login(tokenstore=str(path))
         return api, path
@@ -203,15 +204,15 @@ def garmin_client(interactive: bool = False):
         api.login(tokenstore=tokenstore)
     except Exception as e:  # noqa: BLE001
         sys.exit(
-            f"Garmin-login mislukt ({type(e).__name__}). Tokens ontbreken of zijn verlopen: "
-            "voer lokaal 'python vitadock_garmin_sync.py --garmin-login' uit en werk het "
-            "secret GARMIN_TOKENS bij (zie README)."
+            f"Garmin login failed ({type(e).__name__}). Tokens are missing or expired: "
+            "run 'python vitadock_garmin_sync.py --garmin-login' locally and update the "
+            "GARMIN_TOKENS secret (see README)."
         )
     return api, None
 
 
 def garmin_existing(api, start: datetime, end: datetime) -> list[tuple[float, float]]:
-    """(epoch-seconden UTC, kg) van bestaande Garmin-weigh-ins in het venster."""
+    """(epoch seconds UTC, kg) of existing Garmin weigh-ins in the window."""
     data = api.get_body_composition(
         (start - timedelta(days=1)).date().isoformat(),
         (end + timedelta(days=1)).date().isoformat(),
@@ -250,19 +251,19 @@ def upload(api, m: Measurement) -> None:
 # Main
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Sync VitaDock Online-weegdata naar Garmin Connect")
-    p.add_argument("--days", type=int, default=14, help="aantal dagen terugkijken (default 14)")
-    p.add_argument("--since", help="sync alles vanaf deze datum (YYYY-MM-DD), voor historie")
-    p.add_argument("--dry-run", action="store_true", help="niets uploaden, alleen tonen")
+    p = argparse.ArgumentParser(description="Sync VitaDock Online weigh-ins to Garmin Connect")
+    p.add_argument("--days", type=int, default=14, help="number of days to look back (default 14)")
+    p.add_argument("--since", help="sync everything from this date (YYYY-MM-DD), for backfills")
+    p.add_argument("--dry-run", action="store_true", help="upload nothing, only show")
     p.add_argument("--garmin-login", action="store_true",
-                   help="eenmalige interactieve Garmin-login (MFA) en tokens opslaan")
+                   help="one-off interactive Garmin login (MFA) and store tokens")
     p.add_argument("--private", action="store_true",
-                   help="geen meetwaarden/datums loggen (standaard aan in GitHub Actions)")
+                   help="do not log measurement values/dates (on by default in GitHub Actions)")
     p.add_argument("-v", "--verbose", action="store_true")
     args = p.parse_args(argv)
 
     private = args.private or os.environ.get("GITHUB_ACTIONS") == "true"
-    verbose = args.verbose and not private   # debug-logs kunnen data bevatten
+    verbose = args.verbose and not private   # debug logs may contain data
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -273,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.garmin_login:
         api, path = garmin_client(interactive=True)
-        log.info("Garmin-login gelukt, tokens opgeslagen in %s", path)
+        log.info("Garmin login succeeded, tokens stored in %s", path)
         return 0
 
     now = datetime.now(timezone.utc)
@@ -283,42 +284,42 @@ def main(argv: list[str] | None = None) -> int:
             if args.since else now - timedelta(days=args.days)
         )
     except ValueError:
-        sys.exit("--since moet de vorm YYYY-MM-DD hebben")
+        sys.exit("--since must have the format YYYY-MM-DD")
 
     measurements = fetch_vitadock(env("VITADOCK_EMAIL"), env("VITADOCK_PASSWORD"))
     if private:
-        log.info("VitaDock: %d metingen totaal", len(measurements))
+        log.info("VitaDock: %d measurements in total", len(measurements))
     else:
-        log.info("VitaDock: %d metingen totaal, laatste op %s", len(measurements),
+        log.info("VitaDock: %d measurements in total, latest at %s", len(measurements),
                  measurements[-1].ts.isoformat() if measurements else "-")
     window = [m for m in measurements if m.ts >= start]
-    log.info("%d metingen in het sync-venster", len(window))
+    log.info("%d measurements in the sync window", len(window))
     if not window:
-        log.info("Niets te synchroniseren.")
+        log.info("Nothing to sync.")
         return 0
 
     api, _ = garmin_client()
     existing = garmin_existing(api, window[0].ts, now)
     todo = [m for m in window if not already_in_garmin(m, existing)]
-    log.info("Garmin: %d bestaande weigh-ins in venster, %d nieuw te uploaden",
+    log.info("Garmin: %d existing weigh-ins in window, %d new to upload",
              len(existing), len(todo))
 
     failures = 0
     for i, m in enumerate(todo, 1):
-        desc = (f"meting {i}/{len(todo)}" if private else
+        desc = (f"measurement {i}/{len(todo)}" if private else
                 f"{m.ts.astimezone():%Y-%m-%d %H:%M}  {m.weight:.1f} kg  "
-                f"vet {m.fat_pct}%  water {m.water_pct}%  spier {m.muscle_kg} kg  "
-                f"bot {m.bone_kg} kg  BMI {m.bmi}")
+                f"fat {m.fat_pct}%  water {m.water_pct}%  muscle {m.muscle_kg} kg  "
+                f"bone {m.bone_kg} kg  BMI {m.bmi}")
         if args.dry_run:
             log.info("[dry-run] %s", desc)
             continue
         try:
             upload(api, m)
-            log.info("Geüpload: %s", desc)
+            log.info("Uploaded: %s", desc)
             time.sleep(1.5)
-        except Exception as e:  # noqa: BLE001 - doorgaan met de rest
+        except Exception as e:  # noqa: BLE001 - continue with the rest
             failures += 1
-            log.error("Upload mislukt voor %s: %s: %s", desc, type(e).__name__, str(e)[:200])
+            log.error("Upload failed for %s: %s: %s", desc, type(e).__name__, str(e)[:200])
 
     summary = {"vitadock_total": len(measurements), "window": len(window),
                "uploaded": 0 if args.dry_run else len(todo) - failures,

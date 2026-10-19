@@ -1,4 +1,4 @@
-# Nooit committen: wachtwoorden en tokens
+# Never commit: passwords and tokens
 .env
 *.env
 !.env.example
